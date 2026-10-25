@@ -12,7 +12,6 @@ package org.junitpioneer.jupiter.cartesian;
 
 import static java.lang.String.format;
 import static java.util.Arrays.stream;
-import static java.util.stream.Collectors.toList;
 import static org.junit.platform.commons.support.AnnotationSupport.isAnnotated;
 
 import java.lang.reflect.Method;
@@ -59,27 +58,14 @@ class MethodParameterProvider implements CartesianParameterArgumentsProvider<Obj
 	public Stream<Object> provideArguments(ExtensionContext context, Parameter parameter) {
 		Class<?> testClass = context.getRequiredTestClass();
 		Method testMethod = context.getRequiredTestMethod();
-		Object testInstance = context.getTestInstance().orElse(null);
-		Lifecycle lifecycle = context.getTestInstanceLifecycle().orElse(null);
 		return stream(source.value())
 				.map(factoryMethodName -> findFactoryMethod(testClass, testMethod, factoryMethodName))
-				.map(factoryMethod -> validateFactoryMethod(factoryMethod, testInstance, lifecycle))
-				.map(factoryMethod -> context.getExecutableInvoker().invoke(factoryMethod, testInstance))
+				.map(factoryMethod -> context
+						.getExecutableInvoker()
+						.invoke(factoryMethod, findInvocationTarget(context, factoryMethod)))
 				.flatMap(PioneerUtils::toStream);
 	}
 
-	/**
-	 * Find the factory method referenced by {@code factoryMethodName}, which has the
-	 * form {@code [className#]methodName[(parameters)]}.
-	 *
-	 * <p>If a class name is given, only that class is searched. Otherwise, the test
-	 * class and then each of its enclosing classes (outwards) are searched.
-	 *
-	 * <p>If a parameter list is given (even an empty one), the method must match it
-	 * exactly. Otherwise, a method with that name and without parameters is preferred,
-	 * falling back to the single method with that name, a return type that can be
-	 * converted to a {@link Stream}, and no test annotation.
-	 */
 	private static Method findFactoryMethod(Class<?> testClass, Method testMethod, String factoryMethodName) {
 		String methodName = MemberNameUtils
 				.extractMethodName(factoryMethodName)
@@ -143,18 +129,6 @@ class MethodParameterProvider implements CartesianParameterArgumentsProvider<Obj
 		return findFactoryMethodBySimpleName(clazz, testMethod, methodName);
 	}
 
-	/**
-	 * Find the factory method by searching for all methods in the given {@code clazz}
-	 * with the desired {@code factoryMethodName} which have return types that can be
-	 * converted to a {@link Stream}, ignoring the {@code testMethod} itself as well
-	 * as any {@code @Test}, {@code @TestTemplate}, or {@code @TestFactory} methods
-	 * with the same name.
-	 *
-	 * @return the single factory method matching the search criteria, or an empty
-	 *         {@code Optional} if the class has no method with that name
-	 * @throws PreconditionViolationException if methods with that name were found, but
-	 *                                        none or more than one of them is a valid factory method
-	 */
 	private static Optional<Method> findFactoryMethodBySimpleName(Class<?> clazz, Method testMethod,
 			String factoryMethodName) {
 		Predicate<Method> isCandidate = candidate -> factoryMethodName.equals(candidate.getName())
@@ -164,7 +138,7 @@ class MethodParameterProvider implements CartesianParameterArgumentsProvider<Obj
 			return Optional.empty();
 		}
 
-		List<Method> factoryMethods = candidates.stream().filter(isFactoryMethod).collect(toList());
+		List<Method> factoryMethods = candidates.stream().filter(isFactoryMethod).toList();
 		// If we didn't find the factory method using the isFactoryMethod Predicate, perhaps
 		// the specified factory method has an invalid return type or is a test method.
 		// In that case, we report the invalid candidates that were found.
@@ -184,18 +158,26 @@ class MethodParameterProvider implements CartesianParameterArgumentsProvider<Obj
 				|| isAnnotated(candidate, TestFactory.class);
 	}
 
-	private static Method validateFactoryMethod(Method factoryMethod, Object testInstance, Lifecycle lifecycle) {
-		// A test instance is only available here with PER_CLASS (the test template's context borrows it
+	private static Object findInvocationTarget(ExtensionContext context, Method factoryMethod) {
+		if (Modifier.isStatic(factoryMethod.getModifiers())) {
+			return null;
+		}
+		// Test instances are only available here with PER_CLASS (the test template's context borrows them
 		// from the class context), but check the lifecycle explicitly instead of relying on that.
-		boolean invocableOnTestInstance = lifecycle == Lifecycle.PER_CLASS
-				&& factoryMethod.getDeclaringClass().isInstance(testInstance);
-		PioneerPreconditions
-				.condition(invocableOnTestInstance || Modifier.isStatic(factoryMethod.getModifiers()),
-					() -> format("Method '%s' must be static: local factory methods must be static "
-							+ "unless the PER_CLASS @TestInstance lifecycle mode is used; "
-							+ "external factory methods must always be static.",
-						factoryMethod.toGenericString()));
-		return factoryMethod;
+		if (context.getTestInstanceLifecycle().orElse(null) != Lifecycle.PER_CLASS) {
+			throw mustBeStatic(factoryMethod);
+		}
+		return context
+				.getTestInstances()
+				.flatMap(instances -> instances.findInstance(factoryMethod.getDeclaringClass()))
+				.orElseThrow(() -> mustBeStatic(factoryMethod));
+	}
+
+	private static PreconditionViolationException mustBeStatic(Method factoryMethod) {
+		return new PreconditionViolationException(format("Method '%s' must be static: local factory methods "
+				+ "must be static unless the PER_CLASS @TestInstance lifecycle mode is used; "
+				+ "external factory methods must always be static.",
+			factoryMethod.toGenericString()));
 	}
 
 }

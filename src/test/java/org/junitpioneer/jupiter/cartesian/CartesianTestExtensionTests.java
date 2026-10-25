@@ -558,6 +558,17 @@ public class CartesianTestExtensionTests {
 		}
 
 		@Test
+		@DisplayName("@MethodParameterSource in @Nested class with non-static factory method in enclosing class and PER_CLASS lifecycle")
+		void testMethodParameterSourceNonStaticFactoryInEnclosingClassPerClass() {
+			ExecutionResults results = PioneerTestKit
+					.executeTestMethodWithParameterTypes(
+						CartesianMethodParameterSourcePerClassTestCases.NestedTestCases.class,
+						"nonStaticFactoryInEnclosingClass", String.class);
+
+			assertThat(results).hasNumberOfDynamicallyRegisteredTests(3).hasNumberOfSucceededTests(3);
+		}
+
+		@Test
 		@DisplayName("@MethodParameterSource in @Nested class prefers factory method in nearest class")
 		void testMethodParameterSourceFactoryShadowedInNestedClass() {
 			ExecutionResults results = PioneerTestKit
@@ -1607,6 +1618,16 @@ public class CartesianTestExtensionTests {
 
 		List<String> instanceAbc() {
 			return Arrays.asList("a", "b", "c");
+		}
+
+		@Nested
+		@TestInstance(Lifecycle.PER_CLASS)
+		class NestedTestCases {
+
+			@CartesianTest
+			void nonStaticFactoryInEnclosingClass(@MethodParameterSource("instanceAbc") String value) {
+			}
+
 		}
 
 	}
